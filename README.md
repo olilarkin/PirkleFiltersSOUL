@@ -1,7 +1,7 @@
 
-Filters by Will Pirkle ported to SOUL
+# Filters by Will Pirkle ported to SOUL
 
-The filters in this namespace are ported from the C++ projects in Will Pirkle's books
+These filters are ported from the C++ projects in Will Pirkle's books
 and the application notes on his website
 
 - https://www.willpirkle.com/books/
