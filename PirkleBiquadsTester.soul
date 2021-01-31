@@ -659,7 +659,7 @@ namespace PirkleBiquads (using SampleType)
         input event
         {
             float frequencyIn   [[ name: "Frequency", min: 10,    max: 22000, init: 1000 ]]; 
-            float qualityIn     [[ name: "Q",         min: 0.01,  max: 10.0,  init: 1.0 ]];
+            float qualityIn     [[ name: "Q",         min: 0.01,  max: 10.0,  init: 1.0, step: 0.01]];
             float gainIn        [[ name: "Gain",      min: -36.0, max: 36.0,  init: 0.0 ]]; 
             float modeIn        [[ name: "Mode",      min: 0,     max: 29,    init: 0,   text: "LPF1P|kLPF1|kHPF1|kLPF2|kHPF2|kBPF2|kBSF2|kButterLPF2|kButterHPF2|kButterBPF2|kButterBSF2|kMMALPF2|kMMALPF2B|kLowShelf|kHiShelf|kNCQParaEQ|kCQParaEQ|kLWRLPF2|kLWRHPF2|kAPF1|kAPF2|kResonA|kResonB|kMatchLP2A|kMatchLP2B|kMatchBP2A|kMatchBP2B|kImpInvLP1|kImpInvLP2"]];
         }

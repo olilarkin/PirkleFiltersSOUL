@@ -277,8 +277,8 @@ namespace VA (using SampleType = float32)
             input event
             {
                 float frequencyIn [[ name: "Frequency", min: FILTER_FC_MIN,   max: FILTER_FC_MAX, init: FILTER_FC_DEFAULT, unit: "Hz" ]]; 
-                float qualityIn   [[ name: "Q",         min: 1.0,             max: 10.0,          init: 1.0 ]];
-                float satIn       [[ name: "Saturation",min: 1.0,             max: 10.0,          init: 1.0 ]]; 
+                float qualityIn   [[ name: "Q",         min: 1.0,             max: 10.0,          init: 1.0,  step: 0.01]];
+                float satIn       [[ name: "Saturation",min: 1.0,             max: 10.0,          init: 1.0,  step: 0.01]];
                 float modeIn      [[ name: "Mode",      min: 0,      		 max: 5,       		 init: 0,     text: "LP2|HP2|BP2|LP4|HP4|BP4"]];
                 float nlIn        [[ name: "NonLinear", min: 0,               max: 1,             init: 0,     text: "Off|On"]];
             }
@@ -417,11 +417,11 @@ namespace VA (using SampleType = float32)
 
             input event
             {
-                float frequencyIn [[ name: "Frequency", min: FILTER_FC_MIN,   max: FILTER_FC_MAX, init: FILTER_FC_DEFAULT, unit: "Hz" ]]; 
-                float qualityIn    [[ name: "Q",         min: 1.0,             max: 10.0,          init: 1.0 ]];
-                float satIn  [[ name: "Saturation",min: 1.0,             max: 10.0,          init: 1.0 ]]; 
-                float modeIn [[ name: "Mode",      min: 0,      		 max: 3,       		 init: 0,     text: "LP2|HP2|BP2|BS2"]];
-                float nlIn   [[ name: "NonLinear", min: 0,               max: 1,             init: 0,     text: "Off|On"]];
+                float frequencyIn  [[ name: "Frequency", min: FILTER_FC_MIN,   max: FILTER_FC_MAX, init: FILTER_FC_DEFAULT, unit: "Hz" ]]; 
+                float qualityIn    [[ name: "Q",         min: 1.0,             max: 10.0,          init: 1.0,  step: 0.01]];
+                float satIn        [[ name: "Saturation",min: 1.0,             max: 10.0,          init: 1.0,  step: 0.01]];
+                float modeIn       [[ name: "Mode",      min: 0,      		   max: 3,       	   init: 0,     text: "LP2|HP2|BP2|BS2"]];
+                float nlIn         [[ name: "NonLinear", min: 0,               max: 1,             init: 0,     text: "Off|On"]];
             }
 
             event frequencyIn (float v) { freq = v; recalc = true; }
@@ -607,10 +607,10 @@ namespace VA (using SampleType = float32)
             input event
             {
                 float frequencyIn [[ name: "Frequency", min: FILTER_FC_MIN,   max: FILTER_FC_MAX, init: FILTER_FC_DEFAULT, unit: "Hz" ]]; 
-                float qualityIn    [[ name: "Q",         min: 1.0,             max: 10.0,          init: 1.0 ]];
-                float satIn  [[ name: "Saturation",min: 1.0,             max: 10.0,          init: 1.0 ]]; 
-                float modeIn [[ name: "Mode",      min: 0,      		 max: 1,       		 init: 0,     text: "Lowpass|Highpass"]];
-                float nlIn   [[ name: "NonLinear", min: 0,               max: 1,             init: 0,     text: "Off|On"]];
+                float qualityIn   [[ name: "Q",         min: 1.0,             max: 10.0,          init: 1.0,  step: 0.01]];
+                float satIn       [[ name: "Saturation",min: 1.0,             max: 10.0,          init: 1.0,  step: 0.01]];
+                float modeIn      [[ name: "Mode",      min: 0,      	   	  max: 1,       	  init: 0,     text: "Lowpass|Highpass"]];
+                float nlIn        [[ name: "NonLinear", min: 0,               max: 1,             init: 0,     text: "Off|On"]];
             }
 
             event frequencyIn (float v) { freq = v; recalc = true; }
@@ -797,10 +797,10 @@ namespace VA (using SampleType = float32)
 
             input event
             {
-                float frequencyIn [[ name: "Frequency", min: FILTER_FC_MIN,   max: FILTER_FC_MAX, init: FILTER_FC_DEFAULT, unit: "Hz" ]]; 
-                float qualityIn    [[ name: "Q",         min: 1.0,             max: 10.0,          init: 1.0 ]];
-                float satIn  [[ name: "Saturation",min: 1.0,             max: 10.0,          init: 1.0 ]]; 
-                float nlIn   [[ name: "NonLinear", min: 0,               max: 1,             init: 0,     text: "Off|On"]];
+                float frequencyIn   [[ name: "Frequency", min: FILTER_FC_MIN,   max: FILTER_FC_MAX, init: FILTER_FC_DEFAULT, unit: "Hz" ]]; 
+                float qualityIn     [[ name: "Q",         min: 1.0,             max: 10.0,          init: 1.0,  step: 0.01]];
+                float satIn         [[ name: "Saturation",min: 1.0,             max: 10.0,          init: 1.0,  step: 0.01]];
+                float nlIn          [[ name: "NonLinear", min: 0,               max: 1,             init: 0,     text: "Off|On"]];
             }
 
             event frequencyIn (float v) { freq = v; recalc = true; }
