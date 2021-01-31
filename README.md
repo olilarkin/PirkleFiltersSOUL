@@ -1,5 +1,6 @@
 
 Filters by Will Pirkle ported to SOUL
+
 The filters in this namespace are ported from the C++ projects in Will Pirkle's "Designing Software Synthesizer Plug-Ins"
 and the application notes on his website
 
