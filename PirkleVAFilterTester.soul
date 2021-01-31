@@ -1,0 +1,915 @@
+/** 
+    Virtual Analogue Filters by Will Pirkle
+    The filters in this namespace are ported from the C++ projects in Will Pirkle's "Designing Software Synthesizer Plug-Ins"
+    and the application notes on his website
+
+    - https://www.willpirkle.com/synthbook/download-synth-projects/
+    - https://www.willpirkle.com/app-notes/
+*/
+
+namespace VA (using SampleType = float32)
+{
+    let FILTER_FC_MIN = 80.0;		    // 80Hz
+    let FILTER_FC_MAX = 18000.0;		// 18kHz
+    let FILTER_FC_DEFAULT = 10000.0f;	// 10kHz
+
+    namespace OnePole
+    {
+        namespace Mode
+        {
+            let lowpass = 0;
+            let highpass = 1;
+            let allpass = 2;
+        }
+
+        struct Coeffs
+        {
+            // Trapezoidal Integrator Components
+            SampleType mAlpha; // Feed Forward coeff
+
+            // ADDED for Korg35 and Moog Ladder Filter
+            SampleType mBeta;
+
+            // ADDED for Diode Ladder Filter 
+            SampleType mGamma;   // Pre-Gain
+            SampleType mDelta;   // FB_IN Coeff
+            SampleType mEpsilon; // FB_OUT scalar
+            SampleType ma0;      // input gain
+
+            // note: this is NOT being used as a z-1 storage register!
+            SampleType mFeedback; // feedback coeff from S 
+        }
+
+        struct State
+        {
+            SampleType mZ1; // z-1 storage location
+        }
+
+        void setup (State& s, Coeffs& c)
+        {
+            // init defaults to simple LPF/HPF structure
+            c.mAlpha    = 1.0;
+            c.mBeta     = 0.0;
+            c.mGamma    = 1.0;
+            c.mDelta    = 0.0;
+            c.mEpsilon  = 0.0;
+            c.ma0       = 1.0;
+            c.mFeedback = 0.0;
+
+            reset (s, c);
+        }
+
+        void reset (State& s, Coeffs& c)
+        {
+            s.mZ1 = 0.0;
+            c.mFeedback = 0.0;
+        }
+
+        // mFeedback & mDelta = 0 for non-Diode filters
+        SampleType getFeedbackOutput (State& s, Coeffs& c)
+        {
+            return c.mBeta * (s.mZ1 + c.mFeedback * c.mDelta);
+        }
+
+        void update (Coeffs& c, float64 sampleRate, float64 freqHz)
+        {
+            freqHz = clamp (freqHz, FILTER_FC_MIN, FILTER_FC_MAX);
+            let wd = twoPi * freqHz;          
+            let T  = 1.0 / sampleRate;             
+            let wa = (2.0 / T) * tan (wd * T / 2.0); 
+            let g  = wa * T / 2.0;            
+
+            c.mAlpha = SampleType(g / (1.0 + g));
+        }
+
+        SampleType process (State& s, SampleType x, Coeffs& c, int mode) 
+        {
+            // for diode filter support
+            x = x * c.mGamma + c.mFeedback + c.mEpsilon * getFeedbackOutput (s, c);
+            // calculate v(n)
+            let vn = (c.ma0 * x - s.mZ1) * c.mAlpha;
+            // form LP output
+            let lpf = vn + s.mZ1;
+            // update memory
+            s.mZ1 = vn + lpf;
+
+            let hpf = x - lpf;
+            let apf = lpf - hpf;
+
+            if (mode == Mode::highpass)
+                return hpf;
+            else if (mode == Mode::allpass)
+                return apf;
+            else
+                return lpf;
+        }
+
+        processor Processor
+        {
+            input stream SampleType in;
+            output stream SampleType out;
+
+            input event
+            {
+                float frequencyIn [[ name: "Frequency", min: FILTER_FC_MIN,   max: FILTER_FC_MAX, init: FILTER_FC_DEFAULT, unit: "Hz" ]]; 
+                float modeIn      [[ name: "Mode",      min: 0,      		  max: 2,       	  init: 0,     text: "Lowpass|Highpass|Allpass"]];
+            }
+
+            event frequencyIn (float v) { freq = v; recalc = true; }   
+            event modeIn (float v) { mode = int(v); recalc = true; }
+
+            float freq = FILTER_FC_DEFAULT;
+            int mode = Mode::lowpass;
+            bool recalc = true;
+
+            void run()
+            {
+                State s;
+                Coeffs c;
+                VA::OnePole::setup(s, c);
+
+                loop
+                {
+                    if (recalc)
+                    {
+                        recalc = false;
+                        c.update (processor.frequency, freq);
+                    }
+
+                    loop (16)
+                    {
+                        out << s.process (in, c, mode);
+                        advance();
+                    }
+                }
+            }
+        }
+    }
+
+    namespace MoogLadder
+    {
+        namespace Mode
+        {
+            let lowpass2  = 0;
+            let highpass2 = 1;
+            let bandpass2 = 2;
+            let lowpass4  = 3;
+            let highpass4 = 4;
+            let bandpass4 = 5;
+        }
+
+        struct Coeffs
+        {
+            VA::OnePole::Coeffs mLPF1c;
+            VA::OnePole::Coeffs mLPF2c;
+            VA::OnePole::Coeffs mLPF3c;
+            VA::OnePole::Coeffs mLPF4c;
+
+            SampleType mK;		// K, set with Q
+            SampleType mGamma;	// see block diagram
+            SampleType mAlpha0;
+
+            // Oberheim Xpander variations
+            SampleType mA;
+            SampleType mB;
+            SampleType mC;
+            SampleType mD;
+            SampleType mE;
+        }
+
+        struct State
+        {
+            VA::OnePole::State mLPF1s;
+            VA::OnePole::State mLPF2s;
+            VA::OnePole::State mLPF3s;
+            VA::OnePole::State mLPF4s;
+        }
+
+        void setup (State& s, Coeffs& c)
+        {
+            c.mK = SampleType(0);
+            c.mAlpha0 = SampleType(1);
+            c.mA = SampleType(0); 
+            c.mB = SampleType(0); 
+            c.mC = SampleType(0); 
+            c.mD = SampleType(0); 
+            c.mE = SampleType(0);
+            VA::OnePole::setup(s.mLPF1s, c.mLPF1c);
+            VA::OnePole::setup(s.mLPF2s, c.mLPF2c);
+            VA::OnePole::setup(s.mLPF3s, c.mLPF3c);
+            VA::OnePole::setup(s.mLPF4s, c.mLPF4c);
+        }
+
+        void update (Coeffs& c, float64 sampleRate, float64 freqHz, float64 q, int mode)
+        {
+            freqHz = clamp (freqHz, FILTER_FC_MIN, FILTER_FC_MAX);
+            q = clamp (q, 1.0, 10.0);
+
+            // set q
+            c.mK = SampleType(4.0) * (SampleType(q) - SampleType(1))/(SampleType(10.0) - SampleType(1));
+
+            // prewarp for BZT
+            let wd = twoPi * freqHz;          
+            let T  = 1.0 / sampleRate;             
+            let wa = (2.0/ T) * tan( wd * T / 2.0); 
+            let g  = SampleType(wa * T / 2.0);    
+
+            // G - the feedforward coeff in the VA One Pole
+            //     same for LPF, HPF
+            let G = SampleType( g / (1.0 + g));
+
+            // set alphas
+            c.mLPF1c.mAlpha = G;
+            c.mLPF2c.mAlpha = G;
+            c.mLPF3c.mAlpha = G;
+            c.mLPF4c.mAlpha = G;
+
+            // set betas
+            c.mLPF1c.mBeta = G * G * G / (SampleType(1) + g);
+            c.mLPF2c.mBeta = G * G / (SampleType(1) + g);
+            c.mLPF3c.mBeta = G / (SampleType(1) + g);
+            c.mLPF4c.mBeta = SampleType(1) / (SampleType(1) + g);
+
+            c.mGamma = G * G * G * G; // G^4
+
+            c.mAlpha0 = SampleType(1) / (SampleType(1)+ c.mK * c.mGamma);
+
+            if      (mode == Mode::lowpass2)  { c.mA = 0.0; c.mB = 0.0;  c.mC = 1.0;  c.mD = 0.0;  c.mE = 0.0; }
+            else if (mode == Mode::highpass2) { c.mA = 1.0; c.mB = -2.0; c.mC = 1.0;  c.mD = 0.0;  c.mE = 0.0; }
+            else if (mode == Mode::bandpass2) { c.mA = 0.0; c.mB = 2.0;  c.mC = -2.0; c.mD = 0.0;  c.mE = 0.0; }
+            else if (mode == Mode::lowpass4)  { c.mA = 0.0; c.mB = 0.0;  c.mC = 0.0;  c.mD = 0.0;  c.mE = 1.0; }
+            else if (mode == Mode::highpass4) { c.mA = 1.0; c.mB = -4.0; c.mC = 6.0;  c.mD = -4.0; c.mE = 1.0; }
+            else if (mode == Mode::bandpass4) { c.mA = 0.0; c.mB = 0.0;  c.mC = 4.0;  c.mD = -8.0; c.mE = 4.0; }
+        }
+
+        SampleType process (State& s, SampleType x, Coeffs& c, bool nonLinear, float saturation, float gainComp) 
+        {
+            let dSigma = s.mLPF1s.getFeedbackOutput (c.mLPF1c) + 
+                         s.mLPF2s.getFeedbackOutput (c.mLPF2c) + 
+                         s.mLPF3s.getFeedbackOutput (c.mLPF3c) +
+                         s.mLPF4s.getFeedbackOutput (c.mLPF4c);
+
+            // for passband gain compensation
+            x *= SampleType(1) + gainComp * c.mK;
+
+            // calculate input to first filter
+            SampleType dU = (x - c.mK * dSigma) * c.mAlpha0;
+
+            if(nonLinear)
+                dU = tanh (saturation * dU); // TODO: fast tanh
+        
+            // cascade of 4 filters
+            let mode = VA::OnePole::Mode::lowpass;
+            let dLP1 = s.mLPF1s.process(dU  , c.mLPF1c, mode);
+            let dLP2 = s.mLPF2s.process(dLP1, c.mLPF2c, mode);
+            let dLP3 = s.mLPF3s.process(dLP2, c.mLPF3c, mode);
+            let dLP4 = s.mLPF4s.process(dLP3, c.mLPF4c, mode);
+
+            // Oberheim variations
+            return c.mA * dU + c.mB * dLP1 + c.mC * dLP2 + c.mD * dLP3 +  c.mE * dLP4;  
+        }
+
+        processor Processor
+        {
+            input stream SampleType in;
+            output stream SampleType out;
+
+            input event
+            {
+                float frequencyIn [[ name: "Frequency", min: FILTER_FC_MIN,   max: FILTER_FC_MAX, init: FILTER_FC_DEFAULT, unit: "Hz" ]]; 
+                float qualityIn   [[ name: "Q",         min: 1.0,             max: 10.0,          init: 1.0 ]];
+                float satIn       [[ name: "Saturation",min: 1.0,             max: 10.0,          init: 1.0 ]]; 
+                float modeIn      [[ name: "Mode",      min: 0,      		 max: 5,       		 init: 0,     text: "LP2|HP2|BP2|LP4|HP4|BP4"]];
+                float nlIn        [[ name: "NonLinear", min: 0,               max: 1,             init: 0,     text: "Off|On"]];
+            }
+
+            event frequencyIn (float v) { freq = v; recalc = true; }
+            event qualityIn    (float v) { q = v; recalc = true; } 
+            event satIn  (float v) { sat = v; recalc = true; } 
+            event modeIn (float v) { mode = int(v); recalc = true; }
+            event nlIn   (float v) { nonLinear = v > 0.5f; recalc = true; }
+
+            float freq = FILTER_FC_DEFAULT;
+            float q = 1.0;
+            float sat = 1.0;
+            int mode = Mode::lowpass2;
+            bool recalc = true;
+            bool nonLinear = false;
+
+            void run()
+            {
+                State s;
+                Coeffs c;
+                MoogLadder::setup(s, c);
+
+                loop
+                {
+                    if (recalc)
+                    {
+                        recalc = false;
+                        c.update (processor.frequency, freq, q, mode);
+                    }
+
+                    loop (16)
+                    {
+                        out << s.process (in, c, nonLinear, sat, 0.0); // TODO: gain comp
+                        advance();
+                    }
+                }
+            }
+        }
+    }
+
+    namespace SEM
+    {
+        namespace Mode
+        {
+            let lowpass2  = 0;
+            let highpass2 = 1;
+            let bandpass2 = 2;
+            let bandstop2 = 3;
+        }
+
+        struct Coeffs
+        {
+            // Trapezoidal Integrator Components
+            SampleType mAlpha0; // input scalar
+            SampleType mAlpha;  // alpha is same as VA One Pole
+            SampleType mRho;    // feedback
+            SampleType mQ;      // raw Q value, in range 0.5->25
+        }
+
+        struct State
+        {
+            SampleType mZ11; // our z-1 storage location
+            SampleType mZ12; // our z-1 storage location # 2
+        }
+
+        void setup (State& s, Coeffs& c)
+        {
+            c.mAlpha0 = 1.0;
+            c.mAlpha = 1.0;
+            c.mRho = 1.0;
+            c.mQ = 0.707f; // Butterworth
+
+            reset (s);
+        }
+
+        void reset (State& s)
+        {
+            s.mZ11 = 0.0;
+            s.mZ12 = 0.0;
+        }
+
+        void update (Coeffs& c, float64 sampleRate, float64 freqHz, float64 q)
+        {
+            freqHz = clamp (freqHz, FILTER_FC_MIN, FILTER_FC_MAX);
+            q = clamp (q, 1.0, 10.0);
+
+            // this maps dQControl = 1->10 to Q = 0.5->25
+            c.mQ = SampleType((25.0 - 0.5) * (q - 1.0) / (10.0 - 1.0) + 0.5);
+
+            // prewarp the cutoff- these are bilinear-transform filters
+            let wd = twoPi * freqHz;
+            let T  = 1.0 / sampleRate;
+            let wa = (2.0 / T ) * tan ( wd * T / 2.0); 
+            let g  = SampleType(wa * T / 2.0);
+
+            // note R is the traditional analog damping factor
+            let R = 1.0 / (2.0 * c.mQ);
+
+            // set the coeffs
+            c.mAlpha0 = SampleType(SampleType(1) / (1.0 + 2.0 * R * g + g * g));
+            c.mAlpha = g;
+            c.mRho = SampleType(2.0 * R + g);
+        }
+
+        SampleType process (State& s, SampleType x, Coeffs& c, int mode, bool nonLinear, float saturation, float auxControl) 
+        {
+            // form the HP output first
+            SampleType hpf = c.mAlpha0 * (x - c.mRho * s.mZ11 - s.mZ12);
+            SampleType bpf = c.mAlpha * hpf + s.mZ11;
+
+            if(nonLinear)
+                bpf = tanh (saturation * bpf); // TODO: fast tanh
+
+            SampleType lpf = c.mAlpha * bpf + s.mZ12;
+            // note R is the traditional analog damping factor
+            SampleType R = SampleType(1) / (SampleType(2.0) * c.mQ);
+            SampleType bsf = x - SampleType(2.0) * R * bpf;
+            SampleType semBSF = auxControl * hpf + (SampleType(1) - auxControl) * lpf;
+
+            // update memory
+            s.mZ11 = c.mAlpha * hpf + bpf;
+            s.mZ12 = c.mAlpha * bpf + lpf;
+
+            if(mode == Mode::lowpass2)        return lpf;
+            else if(mode == Mode::highpass2)  return hpf;
+            else if(mode == Mode::bandpass2)  return bpf; 
+            else if(mode == Mode::bandstop2) return semBSF;
+            else return lpf;
+        }
+
+        processor Processor
+        {
+            input stream SampleType in;
+            output stream SampleType out;
+
+            input event
+            {
+                float frequencyIn [[ name: "Frequency", min: FILTER_FC_MIN,   max: FILTER_FC_MAX, init: FILTER_FC_DEFAULT, unit: "Hz" ]]; 
+                float qualityIn    [[ name: "Q",         min: 1.0,             max: 10.0,          init: 1.0 ]];
+                float satIn  [[ name: "Saturation",min: 1.0,             max: 10.0,          init: 1.0 ]]; 
+                float modeIn [[ name: "Mode",      min: 0,      		 max: 3,       		 init: 0,     text: "LP2|HP2|BP2|BS2"]];
+                float nlIn   [[ name: "NonLinear", min: 0,               max: 1,             init: 0,     text: "Off|On"]];
+            }
+
+            event frequencyIn (float v) { freq = v; recalc = true; }
+            event qualityIn (float v)    { q = v; recalc = true; } 
+            event satIn (float v)  { sat = v; recalc = true; } 
+            event modeIn (float v) { mode = int(v); recalc = true; }
+            event nlIn (float v)   { nonLinear = v > 0.5f; recalc = true; }
+
+            float freq = FILTER_FC_DEFAULT;
+            float q = 1.0;
+            float sat = 1.0;
+            int mode = Mode::lowpass2;
+            bool recalc = true;
+            bool nonLinear = false;
+
+            void run()
+            {
+                State s;
+                Coeffs c;
+                SEM::setup(s, c);
+
+                loop
+                {
+                    if (recalc)
+                    {
+                        recalc = false;
+                        c.update (processor.frequency, freq, q);
+                    }
+
+                    loop (16)
+                    {
+                        out << s.process (in, c, mode, nonLinear, sat, 0.5); // TODO: auxControl
+                        advance();
+                    }
+                }
+            }
+        }
+    }
+
+    namespace KThreeFive
+    {
+        /** http://www.willpirkle.com/Downloads/AN-5Korg35_V3.pdf */
+
+        namespace Mode
+        {
+            let lowpass  = 0;
+            let highpass = 1;
+        }
+
+        struct Coeffs
+        {
+            // LPF: LPF1+LPF2+HPF1
+            // HPF: HPF1+LPF1+HPF2
+            VA::OnePole::Coeffs mLPF1c;
+            VA::OnePole::Coeffs mLPF2c;
+            VA::OnePole::Coeffs mHPF1c;
+            VA::OnePole::Coeffs mHPF2c;
+
+            SampleType mK;		// K, set with Q
+            SampleType mAlpha0;	// our u scalar value
+        }
+
+        struct State
+        {
+            VA::OnePole::State mLPF1s;
+            VA::OnePole::State mLPF2s;
+            VA::OnePole::State mHPF1s;
+            VA::OnePole::State mHPF2s;
+        }
+
+        void setup (State& s, Coeffs& c)
+        {
+            c.mK = SampleType(0.01);
+            c.mAlpha0 = SampleType(0);
+            VA::OnePole::setup(s.mLPF1s, c.mLPF1c);
+            VA::OnePole::setup(s.mLPF2s, c.mLPF2c);
+            VA::OnePole::setup(s.mHPF1s, c.mHPF1c);
+            VA::OnePole::setup(s.mHPF2s, c.mHPF2c);
+        }
+
+        void update (Coeffs& c, float64 sampleRate, float64 freqHz, float64 q, int mode)
+        {
+            freqHz = clamp (freqHz, FILTER_FC_MIN, FILTER_FC_MAX);
+            q = clamp (q, 1.0, 10.0);
+
+            // set q
+            c.mK = SampleType((2.0 - 0.01) * (q - 1.0)/(10.0 - 1.0) + 0.01);
+
+            // prewarp for BZT
+            let wd = twoPi * freqHz;          
+            let T  = 1.0 / sampleRate;             
+            let wa = (2.0/ T) * tan( wd * T / 2.0); 
+            let g  = SampleType(wa * T / 2.0);    
+
+            // G - the feedforward coeff in the VA One Pole
+            //     same for LPF, HPF
+            let G = SampleType( g / (1.0 + g));
+
+            // set alphas
+            c.mLPF1c.mAlpha = G;
+            c.mLPF2c.mAlpha = G;
+            c.mHPF1c.mAlpha = G;
+            c.mHPF2c.mAlpha = G;
+
+            // set mAlpha0 variable; same for LPF, HPF
+            c.mAlpha0 = SampleType (1.0 / (1.0 - c.mK * G + c.mK * G * G));
+
+            if (mode == Mode::lowpass)
+            {
+                c.mLPF2c.mBeta = SampleType((c.mK - c.mK * G ) / (1.0 + g));
+                c.mHPF1c.mBeta = SampleType(-1.0 / (1.0 + g));
+            }
+            else // HPF
+            {
+                c.mHPF2c.mBeta = SampleType(-1.0 * G / (1.0 + g));
+                c.mLPF1c.mBeta = SampleType(1.0 / (1.0 + g));
+            }
+        }
+
+        SampleType process (State& s, SampleType x, Coeffs& c, bool nonLinear, float saturation, int mode) 
+        {
+            SampleType y = 0.0;
+
+            // two filters to implement
+            if (mode == Mode::lowpass)
+            {
+                // process input through LPF1
+                let y1 = s.mLPF1s.process (x, c.mLPF1c, Mode::lowpass);
+
+                // form S35
+                let S35 = s.mHPF1s.getFeedbackOutput (c.mHPF1c) + s.mLPF2s.getFeedbackOutput (c.mLPF2c); 
+
+                // calculate u
+                SampleType u = c.mAlpha0 * (y1 + S35);
+
+                // NAIVE NLP
+                if(nonLinear)
+                {
+                    // Regular Version
+                    u = tanh (saturation * u);
+                }
+
+                // feed it to LPF2
+                y = c.mK * s.mLPF2s.process (u, c.mLPF2c, Mode::lowpass);
+                    
+                // feed y to HPF
+                s.mHPF1s.process (y, c.mHPF1c, Mode::highpass);
+            }
+            else // HPF
+            {
+                // process input through HPF1
+                let y1 = s.mHPF1s.process (x, c.mHPF1c, Mode::highpass);
+
+                // then: form feedback and feed forward values (read before write)
+                let S35 = s.mHPF2s.getFeedbackOutput (c.mHPF2c) + s.mLPF1s.getFeedbackOutput (c.mLPF1c);
+
+                // calculate u
+                let u = c.mAlpha0 * y1 + S35;
+
+                // form output
+                y = c.mK * u;
+
+                // NAIVE NLP
+                if(nonLinear)
+                    y = tanh (saturation * y);
+
+                // process y through feedback BPF
+                s.mLPF1s.process (s.mHPF2s.process (y, c.mHPF2c, Mode::highpass), c.mLPF1c, Mode::lowpass);
+            }
+
+            // auto-normalize
+            if (c.mK > 0.0)
+                y *= SampleType(1) / c.mK;
+
+            return y;
+        }
+
+        processor Processor
+        {
+            input stream SampleType in;
+            output stream SampleType out;
+
+            input event
+            {
+                float frequencyIn [[ name: "Frequency", min: FILTER_FC_MIN,   max: FILTER_FC_MAX, init: FILTER_FC_DEFAULT, unit: "Hz" ]]; 
+                float qualityIn    [[ name: "Q",         min: 1.0,             max: 10.0,          init: 1.0 ]];
+                float satIn  [[ name: "Saturation",min: 1.0,             max: 10.0,          init: 1.0 ]]; 
+                float modeIn [[ name: "Mode",      min: 0,      		 max: 1,       		 init: 0,     text: "Lowpass|Highpass"]];
+                float nlIn   [[ name: "NonLinear", min: 0,               max: 1,             init: 0,     text: "Off|On"]];
+            }
+
+            event frequencyIn (float v) { freq = v; recalc = true; }
+            event qualityIn (float v)    { q = v; recalc = true; } 
+            event satIn (float v)  { sat = v; recalc = true; } 
+            event modeIn (float v) { mode = int(v); recalc = true; }
+            event nlIn (float v)   { nonLinear = v > 0.5f; recalc = true; }
+
+            float freq = FILTER_FC_DEFAULT;
+            float q = 1.0;
+            float sat = 1.0;
+            int mode = Mode::lowpass;
+            bool recalc = true;
+            bool nonLinear = false;
+
+            void run()
+            {
+                State s;
+                Coeffs c;
+                KThreeFive::setup(s, c);
+
+                loop
+                {
+                    if (recalc)
+                    {
+                        recalc = false;
+                        c.update (processor.frequency, freq, q, mode);
+                    }
+
+                    loop (16)
+                    {
+                        out << s.process (in, c, nonLinear, sat, mode);
+                        advance();
+                    }
+                }
+            }
+        }
+    }
+
+    namespace DiodeLadder
+    {
+        /** http://www.willpirkle.com/Downloads/AN-6DiodeLadderFilter.pdf */
+
+        struct Coeffs
+        {
+            VA::OnePole::Coeffs mLPF1c;
+            VA::OnePole::Coeffs mLPF2c;
+            VA::OnePole::Coeffs mLPF3c;
+            VA::OnePole::Coeffs mLPF4c;
+
+            SampleType mK;      // K, set with Q
+            SampleType mGamma;  // needed for final calc and update
+            SampleType mSG1; 
+            SampleType mSG2; 
+            SampleType mSG3; 
+            SampleType mSG4;
+        }
+
+        struct State
+        {
+            VA::OnePole::State mLPF1s;
+            VA::OnePole::State mLPF2s;
+            VA::OnePole::State mLPF3s;
+            VA::OnePole::State mLPF4s;
+        }
+
+        void setup (State& s, Coeffs& c)
+        {
+            // init
+            c.mK = 0;		
+            c.mGamma = 0.0;
+
+            // feedback scalars
+            c.mSG1 = 0.0; 
+            c.mSG2 = 0.0;  
+            c.mSG3 = 0.0;  
+            c.mSG4 = 0.0;  
+
+            VA::OnePole::setup(s.mLPF1s, c.mLPF1c);
+            VA::OnePole::setup(s.mLPF2s, c.mLPF2c);
+            VA::OnePole::setup(s.mLPF3s, c.mLPF3c);
+            VA::OnePole::setup(s.mLPF4s, c.mLPF4c);
+        }
+
+        void update (Coeffs& c, float64 sampleRate, float64 freqHz, float64 q)
+        {
+            freqHz = clamp (freqHz, FILTER_FC_MIN, FILTER_FC_MAX);
+            q = clamp (q, 1.0, 10.0);
+
+            // this maps dQControl = 1->10 to K = 0 -> 17
+            c.mK = SampleType (17.0 * (q - 1.0 ) / (10.0 - 1.0));
+
+            let wd = twoPi * freqHz;
+            let T  = 1.0 / sampleRate;
+            let wa = (2.0 / T ) * tan ( wd * T / 2.0); 
+            let g  = SampleType(wa * T / 2.0);
+
+            // Big G's
+            SampleType G1, G2, G3, G4;
+
+            G4 = SampleType(0.5 * g / (1.0 + g));
+            G3 = SampleType(0.5 * g / (1.0 + g - 0.5 * g * G4));
+            G2 = SampleType(0.5 * g / (1.0 + g - 0.5 * g * G3));
+            G1 = SampleType(g / (1.0 + g - g * G2));
+
+            c.mGamma = G4 * G3 * G2 * G1;
+
+            c.mSG1 = G4 * G3 * G2; 
+            c.mSG2 = G4 * G3; 
+            c.mSG3 = G4; 
+            c.mSG4 = SampleType(1); 
+
+            // set alphas
+            let G = SampleType(g / (1.0 + g));
+
+            c.mLPF1c.mAlpha = G;
+            c.mLPF2c.mAlpha = G;
+            c.mLPF3c.mAlpha = G;
+            c.mLPF4c.mAlpha = G;
+
+            // set betas
+            c.mLPF1c.mBeta = SampleType(1.0 / (1.0 + g - g * G2));
+            c.mLPF2c.mBeta = SampleType(1.0 / (1.0 + g - 0.5 * g * G3));
+            c.mLPF3c.mBeta = SampleType(1.0 / (1.0 + g - 0.5 * g * G4));
+            c.mLPF4c.mBeta = SampleType(1.0 / (1.0 + g));
+
+            // set deltas
+            c.mLPF1c.mDelta = g;
+            c.mLPF2c.mDelta = SampleType(0.5 * g);
+            c.mLPF3c.mDelta = SampleType(0.5 * g);
+            c.mLPF4c.mDelta = SampleType(0);
+
+            c.mLPF1c.mGamma = SampleType(1.0 + G1 * G2);
+            c.mLPF2c.mGamma = SampleType(1.0 + G2 * G3);
+            c.mLPF3c.mGamma = SampleType(1.0 + G3 * G4);
+            c.mLPF4c.mGamma = SampleType(1);
+
+            // set epsilons
+            c.mLPF1c.mEpsilon = G2;
+            c.mLPF2c.mEpsilon = G3;
+            c.mLPF3c.mEpsilon = G4;
+            c.mLPF4c.mEpsilon = 0.0;
+
+            // set a0s
+            c.mLPF1c.ma0 = 1.0;
+            c.mLPF2c.ma0 = 0.5;
+            c.mLPF3c.ma0 = 0.5;
+            c.mLPF4c.ma0 = 0.5;
+        }
+
+        SampleType process (State& s, SampleType x, Coeffs& c, bool nonLinear, float saturation, float auxControl) 
+        {
+            c.mLPF4c.mFeedback = 0.0;
+            c.mLPF3c.mFeedback = s.mLPF4s.getFeedbackOutput (c.mLPF4c);
+            c.mLPF2c.mFeedback = s.mLPF3s.getFeedbackOutput (c.mLPF3c);
+            c.mLPF1c.mFeedback = s.mLPF2s.getFeedbackOutput (c.mLPF2c);
+
+            // form input
+            let dSigma = c.mSG1 * s.mLPF1s.getFeedbackOutput (c.mLPF1c) + 
+                         c.mSG2 * s.mLPF2s.getFeedbackOutput (c.mLPF2c) +
+                         c.mSG3 * s.mLPF3s.getFeedbackOutput (c.mLPF3c) +
+                         c.mSG4 * s.mLPF4s.getFeedbackOutput (c.mLPF4c);
+
+            // for passband gain compensation!
+            x *= SampleType(1) + auxControl * c.mK;
+
+            // form input
+            SampleType dU = (x - c.mK * dSigma) / SampleType(1.0 + c.mK * c.mGamma);
+
+            // ---NLP
+            if (nonLinear)
+                dU = tanh (saturation * dU);
+
+            let mode = VA::OnePole::Mode::lowpass;
+            // cascade of four filters
+            return s.mLPF4s.process ( s.mLPF3s.process ( s.mLPF2s.process ( 
+                       s.mLPF1s.process (dU, c.mLPF1c, mode), c.mLPF2c, mode), c.mLPF3c, mode), c.mLPF4c, mode);
+        }
+
+        processor Processor
+        {
+            input stream SampleType in;
+            output stream SampleType out;
+
+            input event
+            {
+                float frequencyIn [[ name: "Frequency", min: FILTER_FC_MIN,   max: FILTER_FC_MAX, init: FILTER_FC_DEFAULT, unit: "Hz" ]]; 
+                float qualityIn    [[ name: "Q",         min: 1.0,             max: 10.0,          init: 1.0 ]];
+                float satIn  [[ name: "Saturation",min: 1.0,             max: 10.0,          init: 1.0 ]]; 
+                float nlIn   [[ name: "NonLinear", min: 0,               max: 1,             init: 0,     text: "Off|On"]];
+            }
+
+            event frequencyIn (float v) { freq = v; recalc = true; }
+            event qualityIn (float v)    { q = v; recalc = true; } 
+            event satIn (float v)  { sat = v; recalc = true; } 
+            event nlIn (float v)   { nonLinear = v > 0.5f; recalc = true; }
+
+            float freq = FILTER_FC_DEFAULT;
+            float q = 1.0;
+            float sat = 1.0;
+            bool recalc = true;
+            bool nonLinear = false;
+
+            void run()
+            {
+                State s;
+                Coeffs c;
+                DiodeLadder::setup(s, c);
+
+                loop
+                {
+                    if (recalc)
+                    {
+                        recalc = false;
+                        c.update (processor.frequency, freq, q);
+                    }
+
+                    loop (16)
+                    {
+                        out << s.process (in, c, nonLinear, sat, 0.0); // TODO: gain comp
+                        advance();
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Add the base frequency event and LFO stream output with depth in semitones
+processor FrequencyMapping
+{
+    input stream float32 lfoIn;
+    input event float32 frequencyIn    [[ name: "Filter Base Frequency", min: 10.0, max: 10000.0, init: 1000.0, unit: "Hz" ]];
+    input event float32 modDepthIn     [[ name: "LFO Depth",             min: 0.0,  max: 48.0,    init: 0.0,    unit: "Semi" ]];
+    output event float32 frequencyOut;
+
+    event frequencyIn (float v) { baseFreq = v; }
+    event modDepthIn (float v)  { modDepth = v; }
+
+    float baseFreq = 1000.0f;
+    float modDepth = 0.0f;
+
+    void run()
+    {
+        loop
+        {
+            frequencyOut << baseFreq * pow (2.0f, (lfoIn * modDepth) / 12.0f); // TODO: pow() called at SR
+            advance();
+        }
+
+        return;
+    }
+}
+
+graph FilterTester [[ main ]]
+{
+    // input stream float32 in;
+    output stream float32 out;
+
+    input source.shapeIn testSignalShape [[ name: "Test Signal Shape" ]];
+    input source.frequencyIn testSignalFrequency [[ name: "Test Signal Frequency", min: 10, max: 200, init: 50, unit: "Hz"]];
+    input gainStream.volume [[ name: "Test Signal volume"]];
+    input mapper.frequencyIn;
+    input filter.qualityIn [[ name: "Filter Q" ]];
+    input filter.modeIn    [[ name: "Filter Mode" ]];
+    input filter.nlIn      [[ name: "Filter NonLinearites" ]];
+    input filter.satIn     [[ name: "Filter Saturation" ]];
+
+    input lfo.rateHzIn     [[ name: "LFO Rate" ]];
+    input mapper.modDepthIn;
+    input lfo.shapeIn     [[ name: "LFO Shape" ]];
+
+    namespace PolyBlep = soul::oscillators::poly_blep;
+
+    let
+    {
+        source = PolyBlep::Processor (0, 100.0);
+        // source = soul::noise::White;
+
+        gainStream = soul::gain::SmoothedGainParameter(1);
+        gain = soul::gain::DynamicGain (float32);
+        lfo = soul::oscillators::lfo::Processor (0, 1, 100.0f); // you can lower the sample rate of the LFO here with e.g. "/ 4"
+        mapper = FrequencyMapping;
+
+        // filter = VA::OnePole::Processor;
+        // filter = VA::SEM::Processor;
+        // filter = VA::MoogLadder::Processor;
+        filter = VA::KThreeFive::Processor;
+        // filter = VA::DiodeLadder::Processor;
+    }
+
+    connection 
+    {
+        lfo.out -> mapper.lfoIn;
+        mapper.frequencyOut -> filter.frequencyIn;
+
+        gainStream.gain -> gain.gain;
+        source.out -> gain.in;
+        gain.out -> filter.in;
+        filter.out -> out;
+    }
+}
