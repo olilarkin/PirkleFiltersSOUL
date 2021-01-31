@@ -890,7 +890,7 @@ graph FilterTester [[ main ]]
         source = PolyBlep::Processor (0, 100.0);
         // source = soul::noise::White;
 
-        gainStream = soul::gain::SmoothedGainParameter(1);
+        gainStream = soul::gain::SmoothedGainParameter(0.1f);
         gain = soul::gain::DynamicGain (float32);
         lfo = soul::oscillators::lfo::Processor (0, 1, 100.0f); // you can lower the sample rate of the LFO here with e.g. "/ 4"
         mapper = FrequencyMapping;

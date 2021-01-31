@@ -1,10 +1,10 @@
 
 Filters by Will Pirkle ported to SOUL
 
-The filters in this namespace are ported from the C++ projects in Will Pirkle's "Designing Software Synthesizer Plug-Ins"
+The filters in this namespace are ported from the C++ projects in Will Pirkle's books
 and the application notes on his website
 
-- https://www.willpirkle.com/synthbook/download-synth-projects/
+- https://www.willpirkle.com/books/
 - https://www.willpirkle.com/app-notes/
 
 
@@ -14,4 +14,5 @@ depending on the filter
 
 try it online on the SOUL playground:
 
-https://soul.dev/lab/?id=b76c2bd2acf3cf88dab2883896996a5b
+VAFilters: https://soul.dev/lab/?id=b76c2bd2acf3cf88dab2883896996a5b
+Biquads: https://soul.dev/lab/?id=0bccac78e5d441321e85a8ac1da13b75

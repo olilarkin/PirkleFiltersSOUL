@@ -1,0 +1,730 @@
+/** 
+    Biquad-based Filters by Will Pirkle
+    The filters in this namespace are ported from the C++ projects in Will Pirkle's "Designing Audio Effect Plug-Ins in C++"
+    and the application notes on his website
+
+    - https://www.willpirkle.com/about/books/
+    - https://www.willpirkle.com/app-notes/
+*/
+
+namespace PirkleBiquads (using SampleType)
+{
+    let updateInterval = 16;
+    let kSqrtTwo = sqrt (2.0);
+
+    namespace Biquad = soul::filters (SampleType)::biquad;
+
+    namespace Mode 
+    {
+        let kLPF1P       = 0;
+        let kLPF1        = 1; 
+        let kHPF1        = 2; 
+        let kLPF2        = 3; 
+        let kHPF2        = 4; 
+        let kBPF2        = 5; 
+        let kBSF2        = 6; 
+        let kButterLPF2  = 7; 
+        let kButterHPF2  = 8;
+        let kButterBPF2  = 9;
+        let kButterBSF2  = 10; 
+        let kMMALPF2     = 11; 
+        let kMMALPF2B    = 12; 
+        let kLowShelf    = 13; 
+        let kHiShelf     = 14; 
+        let kNCQParaEQ   = 15; 
+        let kCQParaEQ    = 16; 
+        let kLWRLPF2     = 17; 
+        let kLWRHPF2     = 18;
+        let kAPF1        = 19; 
+        let kAPF2        = 20; 
+        let kResonA      = 21; 
+        let kResonB      = 22; 
+        let kMatchLP2A   = 23; 
+        let kMatchLP2B   = 24; 
+        let kMatchBP2A   = 25; 
+        let kMatchBP2B   = 26;
+        let kImpInvLP1   = 27; 
+        let kImpInvLP2   = 28;
+    }
+
+    void update (Biquad::Coeffs& c, float64 sampleRate, int mode, float64 freqHz, float64 Q, float64 boostCut_dB)
+    {
+        Biquad::Coeffs nc; //normalized coefficients
+
+        // --- set default pass-through
+        nc.b[0] = 1.0;
+        // nc[c0] = 1.0;
+        // nc[d0] = 0.0;
+
+        // --- decode filter type and calculate accordingly
+        // --- impulse invariant LPF, matches closely with one-pole version,
+        //     but diverges at VHF
+        if (mode == Mode::kImpInvLP1)
+        {
+            float64 T = 1.0 / sampleRate;
+            float64 omega = 2.0*pi*freqHz;
+            float64 eT = exp(-T*omega);
+
+            nc.b[0] = 1.0 - eT; // <--- normalized by 1-e^aT
+            nc.b[1] = 0.0;
+            nc.b[2] = 0.0;
+            nc.a[1] = -eT;
+            nc.a[2] = 0.0;
+        }
+        else if (mode == Mode::kImpInvLP2)
+        {
+            float64 alpha = 2.0*pi*freqHz / sampleRate;
+            float64 p_Re = -alpha / (2.0*Q);
+            float64 zeta = 1.0 / (2.0 * Q);
+            float64 p_Im = alpha*pow((1.0 - (zeta*zeta)), 0.5);
+            float64 c_Re = 0.0;
+            float64 c_Im = alpha / (2.0*pow((1.0 - (zeta*zeta)), 0.5));
+
+            float64 eP_re = exp(p_Re);
+            nc.b[0] = c_Re;
+            nc.b[1] = -2.0*(c_Re*cos(p_Im) + c_Im*sin(p_Im))*exp(p_Re);
+            nc.b[2] = 0.0;
+            nc.a[1] = -2.0*eP_re*cos(p_Im);
+            nc.a[2] = eP_re*eP_re;
+        }
+        // --- kMatchLP2A = TIGHT fit LPF vicanek algo
+        else if (mode == Mode::kMatchLP2A)
+        {
+            // http://vicanek.de/articles/BiquadFits.pdf
+            float64 theta_c = 2.0*pi*freqHz / sampleRate;
+
+            float64 q = 1.0 / (2.0*Q);
+
+            // --- impulse invariant
+            float64 a_1 = 0.0;
+            float64 a_2 = exp(-2.0*q*theta_c);
+            if (q <= 1.0)
+            {
+                a_1 = -2.0*exp(-q*theta_c)*cos(pow((1.0 - q*q), 0.5)*theta_c);
+            }
+            else
+            {
+                a_1 = -2.0*exp(-q*theta_c)*cosh(pow((q*q - 1.0), 0.5)*theta_c);
+            }
+
+            // --- TIGHT FIT --- //
+            float64 B0 = (1.0 + a_1 + a_2)*(1.0 + a_1 + a_2);
+            float64 B1 = (1.0 - a_1 + a_2)*(1.0 - a_1 + a_2);
+            float64 B2 = -4.0*a_2;
+
+            float64 phi_0 = 1.0 - sin(theta_c / 2.0)*sin(theta_c / 2.0);
+            float64 phi_1 = sin(theta_c / 2.0)*sin(theta_c / 2.0);
+            float64 phi_2 = 4.0*phi_0*phi_1;
+
+            float64 R1 = (B0*phi_0 + B1*phi_1 + B2*phi_2)*(Q*Q);
+            float64 A0 = B0;
+            float64 A1 = (R1 - A0*phi_0) / phi_1;
+
+            if (A0 < 0.0)
+                A0 = 0.0;
+            if (A1 < 0.0)
+                A1 = 0.0;
+
+            float64 b_0 = 0.5*(pow(A0, 0.5) + pow(A1, 0.5));
+            float64 b_1 = pow(A0, 0.5) - b_0;
+            float64 b_2 = 0.0;
+
+            nc.b[0] = b_0;
+            nc.b[1] = b_1;
+            nc.b[2] = b_2;
+            nc.a[1] = a_1;
+            nc.a[2] = a_2;
+        }
+        // --- kMatchLP2B = LOOSE fit LPF vicanek algo
+        else if (mode == Mode::kMatchLP2B)
+        {
+            // http://vicanek.de/articles/BiquadFits.pdf
+            float64 theta_c = 2.0*pi*freqHz / sampleRate;
+            float64 q = 1.0 / (2.0*Q);
+
+            // --- impulse invariant
+            float64 a_1 = 0.0;
+            float64 a_2 = exp(-2.0*q*theta_c);
+            if (q <= 1.0)
+            {
+                a_1 = -2.0*exp(-q*theta_c)*cos(pow((1.0 - q*q), 0.5)*theta_c);
+            }
+            else
+            {
+                a_1 = -2.0*exp(-q*theta_c)*cosh(pow((q*q - 1.0), 0.5)*theta_c);
+            }
+
+            // --- LOOSE FIT --- //
+            float64 f0 = theta_c / pi; // note f0 = fraction of pi, so that f0 = 1.0 = pi = Nyquist
+
+            float64 r0 = 1.0 + a_1 + a_2;
+            float64 denom = (1.0 - f0*f0)*(1.0 - f0*f0) + (f0*f0) / (Q*Q);
+            denom = pow(denom, 0.5);
+            float64 r1 = ((1.0 - a_1 + a_2)*f0*f0) / (denom);
+
+            float64 b_0 = (r0 + r1) / 2.0;
+            float64 b_1 = r0 - b_0;
+            float64 b_2 = 0.0;
+
+            nc.b[0] = b_0;
+            nc.b[1] = b_1;
+            nc.b[2] = b_2;
+            nc.a[1] = a_1;
+            nc.a[2] = a_2;
+        }
+        // --- kMatchBP2A = TIGHT fit BPF vicanek algo
+        else if (mode == Mode::kMatchBP2A)
+        {
+            // http://vicanek.de/articles/BiquadFits.pdf
+            float64 theta_c = 2.0*pi*freqHz / sampleRate;
+            float64 q = 1.0 / (2.0*Q);
+
+            // --- impulse invariant
+            float64 a_1 = 0.0;
+            float64 a_2 = exp(-2.0*q*theta_c);
+            if (q <= 1.0)
+            {
+                a_1 = -2.0*exp(-q*theta_c)*cos(pow((1.0 - q*q), 0.5)*theta_c);
+            }
+            else
+            {
+                a_1 = -2.0*exp(-q*theta_c)*cosh(pow((q*q - 1.0), 0.5)*theta_c);
+            }
+
+            // --- TIGHT FIT --- //
+            float64 B0 = (1.0 + a_1 + a_2)*(1.0 + a_1 + a_2);
+            float64 B1 = (1.0 - a_1 + a_2)*(1.0 - a_1 + a_2);
+            float64 B2 = -4.0*a_2;
+
+            float64 phi_0 = 1.0 - sin(theta_c / 2.0)*sin(theta_c / 2.0);
+            float64 phi_1 = sin(theta_c / 2.0)*sin(theta_c / 2.0);
+            float64 phi_2 = 4.0*phi_0*phi_1;
+
+            float64 R1 = B0*phi_0 + B1*phi_1 + B2*phi_2;
+            float64 R2 = -B0 + B1 + 4.0*(phi_0 - phi_1)*B2;
+
+            float64 A2 = (R1 - R2*phi_1) / (4.0*phi_1*phi_1);
+            float64 A1 = R2 + 4.0*(phi_1 - phi_0)*A2;
+
+            float64 b_1 = -0.5*(pow(A1, 0.5));
+            float64 b_0 = 0.5*(pow((A2 + (b_1*b_1)), 0.5) - b_1);
+            float64 b_2 = -b_0 - b_1;
+
+            nc.b[0] = b_0;
+            nc.b[1] = b_1;
+            nc.b[2] = b_2;
+            nc.a[1] = a_1;
+            nc.a[2] = a_2;        }
+        // --- kMatchBP2B = LOOSE fit BPF vicanek algo
+        else if (mode == Mode::kMatchBP2B)
+        {
+            // http://vicanek.de/articles/BiquadFits.pdf
+            float64 theta_c = 2.0*pi*freqHz / sampleRate;
+            float64 q = 1.0 / (2.0*Q);
+
+            // --- impulse invariant
+            float64 a_1 = 0.0;
+            float64 a_2 = exp(-2.0*q*theta_c);
+            if (q <= 1.0)
+            {
+                a_1 = -2.0*exp(-q*theta_c)*cos(pow((1.0 - q*q), 0.5)*theta_c);
+            }
+            else
+            {
+                a_1 = -2.0*exp(-q*theta_c)*cosh(pow((q*q - 1.0), 0.5)*theta_c);
+            }
+
+            // --- LOOSE FIT --- //
+            float64 f0 = theta_c / pi; // note f0 = fraction of pi, so that f0 = 1.0 = pi = Nyquist
+
+            float64 r0 = (1.0 + a_1 + a_2) / (pi*f0*Q);
+            float64 denom = (1.0 - f0*f0)*(1.0 - f0*f0) + (f0*f0) / (Q*Q);
+            denom = pow(denom, 0.5);
+
+            float64 r1 = ((1.0 - a_1 + a_2)*(f0 / Q)) / (denom);
+
+            float64 b_1 = -r1 / 2.0;
+            float64 b_0 = (r0 - b_1) / 2.0;
+            float64 b_2 = -b_0 - b_1;
+
+            nc.b[0] = b_0;
+            nc.b[1] = b_1;
+            nc.b[2] = b_2;
+            nc.a[1] = a_1;
+            nc.a[2] = a_2;
+        }
+        else if (mode == Mode::kLPF1P)
+        {
+            // --- see book for formulae
+            float64 theta_c = 2.0*pi*freqHz / sampleRate;
+            float64 gamma = 2.0 - cos(theta_c);
+
+            float64 filter_a1 = pow((gamma*gamma - 1.0), 0.5) - gamma;
+            float64 filter_b0 = 1.0 + filter_a1;
+
+            // --- update coeffs
+            nc.b[0] = filter_b0;
+            nc.b[1] = 0.0;
+            nc.b[2] = 0.0;
+            nc.a[1] = filter_a1;
+            nc.a[2] = 0.0;
+        }
+        else if (mode == Mode::kLPF1)
+        {
+            // --- see book for formulae
+            float64 theta_c = 2.0*pi*freqHz / sampleRate;
+            float64 gamma = cos(theta_c) / (1.0 + sin(theta_c));
+
+            // --- update coeffs
+            nc.b[0] = (1.0 - gamma) / 2.0;
+            nc.b[1] = (1.0 - gamma) / 2.0;
+            nc.b[2] = 0.0;
+            nc.a[1] = -gamma;
+            nc.a[2] = 0.0;
+        }
+        else if (mode == Mode::kHPF1)
+        {
+            // --- see book for formulae
+            float64 theta_c = 2.0*pi*freqHz / sampleRate;
+            float64 gamma = cos(theta_c) / (1.0 + sin(theta_c));
+
+            // --- update coeffs
+            nc.b[0] = (1.0 + gamma) / 2.0;
+            nc.b[1] = -(1.0 + gamma) / 2.0;
+            nc.b[2] = 0.0;
+            nc.a[1] = -gamma;
+            nc.a[2] = 0.0;
+        }
+        else if (mode == Mode::kLPF2)
+        {
+            // --- see book for formulae
+            float64 theta_c = 2.0*pi*freqHz / sampleRate;
+            float64 d = 1.0 / Q;
+            float64 betaNumerator = 1.0 - ((d / 2.0)*(sin(theta_c)));
+            float64 betaDenominator = 1.0 + ((d / 2.0)*(sin(theta_c)));
+
+            float64 beta = 0.5*(betaNumerator / betaDenominator);
+            float64 gamma = (0.5 + beta)*(cos(theta_c));
+            float64 alpha = (0.5 + beta - gamma) / 2.0;
+
+            // --- update coeffs
+            nc.b[0] = alpha;
+            nc.b[1] = 2.0*alpha;
+            nc.b[2] = alpha;
+            nc.a[1] = -2.0*gamma;
+            nc.a[2] = 2.0*beta;
+
+        //	float64 mag = getMagResponse(theta_c, nc.b[0], nc.b[1], nc.b[2], nc.a[1], nc.a[2]);
+        }
+        else if (mode == Mode::kHPF2)
+        {
+            // --- see book for formulae
+            float64 theta_c = 2.0*pi*freqHz / sampleRate;
+            float64 d = 1.0 / Q;
+
+            float64 betaNumerator = 1.0 - ((d / 2.0)*(sin(theta_c)));
+            float64 betaDenominator = 1.0 + ((d / 2.0)*(sin(theta_c)));
+
+            float64 beta = 0.5*(betaNumerator / betaDenominator);
+            float64 gamma = (0.5 + beta)*(cos(theta_c));
+            float64 alpha = (0.5 + beta + gamma) / 2.0;
+
+            // --- update coeffs
+            nc.b[0] = alpha;
+            nc.b[1] = -2.0*alpha;
+            nc.b[2] = alpha;
+            nc.a[1] = -2.0*gamma;
+            nc.a[2] = 2.0*beta;
+        }
+        else if (mode == Mode::kBPF2)
+        {
+            // --- see book for formulae
+            float64 K = tan(pi*freqHz / sampleRate);
+            float64 delta = K*K*Q + K + Q;
+
+            // --- update coeffs
+            nc.b[0] = K / delta;;
+            nc.b[1] = 0.0;
+            nc.b[2] = -K / delta;
+            nc.a[1] = 2.0*Q*(K*K - 1) / delta;
+            nc.a[2] = (K*K*Q - K + Q) / delta;
+        }
+        else if (mode == Mode::kBSF2)
+        {
+            // --- see book for formulae
+            float64 K = tan(pi*freqHz / sampleRate);
+            float64 delta = K*K*Q + K + Q;
+
+            // --- update coeffs
+            nc.b[0] = Q*(1 + K*K) / delta;
+            nc.b[1] = 2.0*Q*(K*K - 1) / delta;
+            nc.b[2] = Q*(1 + K*K) / delta;
+            nc.a[1] = 2.0*Q*(K*K - 1) / delta;
+            nc.a[2] = (K*K*Q - K + Q) / delta;
+        }
+        else if (mode == Mode::kButterLPF2)
+        {
+            // --- see book for formulae
+            float64 theta_c = pi*freqHz / sampleRate;
+            float64 C = 1.0 / tan(theta_c);
+
+            // --- update coeffs
+            nc.b[0] = 1.0 / (1.0 + kSqrtTwo*C + C*C);
+            nc.b[1] = 2.0*nc.b[0];
+            nc.b[2] = nc.b[0];
+            nc.a[1] = 2.0*nc.b[0] * (1.0 - C*C);
+            nc.a[2] = nc.b[0] * (1.0 - kSqrtTwo*C + C*C);
+        }
+        else if (mode == Mode::kButterHPF2)
+        {
+            // --- see book for formulae
+            float64 theta_c = pi*freqHz / sampleRate;
+            float64 C = tan(theta_c);
+
+            // --- update coeffs
+            nc.b[0] = 1.0 / (1.0 + kSqrtTwo*C + C*C);
+            nc.b[1] = -2.0*nc.b[0];
+            nc.b[2] = nc.b[0];
+            nc.a[1] = 2.0*nc.b[0] * (C*C - 1.0);
+            nc.a[2] = nc.b[0] * (1.0 - kSqrtTwo*C + C*C);
+        }
+        else if (mode == Mode::kButterBPF2)
+        {
+            // --- see book for formulae
+            float64 theta_c = 2.0*pi*freqHz / sampleRate;
+            float64 BW = freqHz / Q;
+            float64 deltb_c = pi*BW / sampleRate;
+            if (deltb_c >= 0.95*pi / 2.0) deltb_c = 0.95*pi / 2.0;
+
+            float64 C = 1.0 / tan(deltb_c);
+            float64 D = 2.0*cos(theta_c);
+
+            // --- update coeffs
+            nc.b[0] = 1.0 / (1.0 + C);
+            nc.b[1] = 0.0;
+            nc.b[2] = -nc.b[0];
+            nc.a[1] = -nc.b[0] * (C*D);
+            nc.a[2] = nc.b[0] * (C - 1.0);
+        }
+        else if (mode == Mode::kButterBSF2)
+        {
+            // --- see book for formulae
+            float64 theta_c = 2.0*pi*freqHz / sampleRate;
+            float64 BW = freqHz / Q;
+            float64 deltb_c = pi*BW / sampleRate;
+            if (deltb_c >= 0.95*pi / 2.0) deltb_c = 0.95*pi / 2.0;
+
+            float64 C = tan(deltb_c);
+            float64 D = 2.0*cos(theta_c);
+
+            // --- update coeffs
+            nc.b[0] = 1.0 / (1.0 + C);
+            nc.b[1] = -nc.b[0] * D;
+            nc.b[2] = nc.b[0];
+            nc.a[1] = -nc.b[0] * D;
+            nc.a[2] = nc.b[0] * (1.0 - C);
+        }
+        else if (mode == Mode::kMMALPF2 || mode == Mode::kMMALPF2B)
+        {
+            // --- see book for formulae
+            float64 theta_c = 2.0*pi*freqHz / sampleRate;
+            float64 resonance_dB = 0;
+
+            if (Q > 0.707)
+            {
+                float64 peak = Q*Q / pow(Q*Q - 0.25, 0.5);
+                resonance_dB = 20.0*log10(peak);
+            }
+
+            // --- intermediate vars
+            float64 resonance = (cos(theta_c) + (sin(theta_c) * sqrt(pow(10.0, (resonance_dB / 10.0)) - 1))) / ((pow(10.0, (resonance_dB / 20.0)) * sin(theta_c)) + 1);
+            float64 g = pow(10.0, (-resonance_dB / 40.0));
+
+            // --- kMMALPF2B disables the GR with increase in Q
+            if (mode == Mode::kMMALPF2B)
+                g = 1.0;
+
+            float64 filter_a1 = (-2.0) * resonance * cos(theta_c);
+            float64 filter_a2 = resonance * resonance;
+            float64 filter_b0 = g * (1 + filter_a1 + filter_a2);
+
+            // --- update coeffs
+            nc.b[0] = filter_b0;
+            nc.b[1] = 0.0;
+            nc.b[2] = 0.0;
+            nc.a[1] = filter_a1;
+            nc.a[2] = filter_a2;
+        }
+        // else if (mode == Mode::kLowShelf)
+        // {
+        //     // --- see book for formulae
+        //     float64 theta_c = 2.0*pi*freqHz / sampleRate;
+        //     float64 mu = pow(10.0, boostCut_dB / 20.0);
+
+        //     float64 beta = 4.0 / (1.0 + mu);
+        //     float64 delta = beta*tan(theta_c / 2.0);
+        //     float64 gamma = (1.0 - delta) / (1.0 + delta);
+
+        //     // --- update coeffs
+        //     nc.b[0] = (1.0 - gamma) / 2.0;
+        //     nc.b[1] = (1.0 - gamma) / 2.0;
+        //     nc.b[2] = 0.0;
+        //     nc.a[1] = -gamma;
+        //     nc.a[2] = 0.0;
+
+        //     nc[c0] = mu - 1.0;
+        //     nc[d0] = 1.0;
+        // }
+        // else if (mode == Mode::kHiShelf)
+        // {
+        //     float64 theta_c = 2.0*pi*freqHz / sampleRate;
+        //     float64 mu = pow(10.0, boostCut_dB / 20.0);
+
+        //     float64 beta = (1.0 + mu) / 4.0;
+        //     float64 delta = beta*tan(theta_c / 2.0);
+        //     float64 gamma = (1.0 - delta) / (1.0 + delta);
+
+        //     nc.b[0] = (1.0 + gamma) / 2.0;
+        //     nc.b[1] = -nc.b[0];
+        //     nc.b[2] = 0.0;
+        //     nc.a[1] = -gamma;
+        //     nc.a[2] = 0.0;
+
+        //     nc[c0] = mu - 1.0;
+        //     nc[d0] = 1.0;
+        // }
+        else if (mode == Mode::kCQParaEQ)
+        {
+            // --- see book for formulae
+            float64 K = tan(pi*freqHz / sampleRate);
+            float64 Vo = pow(10.0, boostCut_dB / 20.0);
+            bool bBoost = boostCut_dB >= 0 ? true : false;
+
+            float64 d0 = 1.0 + (1.0 / Q)*K + K*K;
+            float64 e0 = 1.0 + (1.0 / (Vo*Q))*K + K*K;
+            float64 alpha = 1.0 + (Vo / Q)*K + K*K;
+            float64 beta = 2.0*(K*K - 1.0);
+            float64 gamma = 1.0 - (Vo / Q)*K + K*K;
+            float64 delta = 1.0 - (1.0 / Q)*K + K*K;
+            float64 eta = 1.0 - (1.0 / (Vo*Q))*K + K*K;
+
+            // --- update coeffs
+            nc.b[0] = bBoost ? alpha / d0 : d0 / e0;
+            nc.b[1] = bBoost ? beta / d0 : beta / e0;
+            nc.b[2] = bBoost ? gamma / d0 : delta / e0;
+            nc.a[1] = bBoost ? beta / d0 : beta / e0;
+            nc.a[2] = bBoost ? delta / d0 : eta / e0;
+        }
+        // else if (mode == Mode::kNCQParaEQ)
+        // {
+        //     // --- see book for formulae
+        //     float64 theta_c = 2.0*pi*freqHz / sampleRate;
+        //     float64 mu = pow(10.0, boostCut_dB / 20.0);
+
+        //     // --- clamp to 0.95 pi/2 (you can experiment with this)
+        //     float64 tanArg = theta_c / (2.0 * Q);
+        //     if (tanArg >= 0.95*pi / 2.0) tanArg = 0.95*pi / 2.0;
+
+        //     // --- intermediate variables (you can condense this if you wish)
+        //     float64 zeta = 4.0 / (1.0 + mu);
+        //     float64 betaNumerator = 1.0 - zeta*tan(tanArg);
+        //     float64 betaDenominator = 1.0 + zeta*tan(tanArg);
+
+        //     float64 beta = 0.5*(betaNumerator / betaDenominator);
+        //     float64 gamma = (0.5 + beta)*(cos(theta_c));
+        //     float64 alpha = (0.5 - beta);
+
+        //     // --- update coeffs
+        //     nc.b[0] = alpha;
+        //     nc.b[1] = 0.0;
+        //     nc.b[2] = -alpha;
+        //     nc.a[1] = -2.0*gamma;
+        //     nc.a[2] = 2.0*beta;
+
+        //     nc[c0] = mu - 1.0;
+        //     nc[d0] = 1.0;
+        
+        // }
+        else if (mode == Mode::kLWRLPF2)
+        {
+            // --- see book for formulae
+            float64 omegb_c = pi*freqHz;
+            float64 theta_c = pi*freqHz / sampleRate;
+
+            float64 k = omegb_c / tan(theta_c);
+            float64 denominator = k*k + omegb_c*omegb_c + 2.0*k*omegb_c;
+            float64 a1_Num = -2.0*k*k + 2.0*omegb_c*omegb_c;
+            float64 a2_Num = -2.0*k*omegb_c + k*k + omegb_c*omegb_c;
+
+            // --- update coeffs
+            nc.b[0] = omegb_c*omegb_c / denominator;
+            nc.b[1] = 2.0*omegb_c*omegb_c / denominator;
+            nc.b[2] = nc.b[0];
+            nc.a[1] = a1_Num / denominator;
+            nc.a[2] = a2_Num / denominator;
+        }
+        else if (mode == Mode::kLWRHPF2)
+        {
+            // --- see book for formulae
+            float64 omegb_c = pi*freqHz;
+            float64 theta_c = pi*freqHz / sampleRate;
+
+            float64 k = omegb_c / tan(theta_c);
+            float64 denominator = k*k + omegb_c*omegb_c + 2.0*k*omegb_c;
+            float64 a1_Num = -2.0*k*k + 2.0*omegb_c*omegb_c;
+            float64 a2_Num = -2.0*k*omegb_c + k*k + omegb_c*omegb_c;
+
+            // --- update coeffs
+            nc.b[0] = k*k / denominator;
+            nc.b[1] = -2.0*k*k / denominator;
+            nc.b[2] = nc.b[0];
+            nc.a[1] = a1_Num / denominator;
+            nc.a[2] = a2_Num / denominator;
+        }
+        else if (mode == Mode::kAPF1)
+        {
+            // --- see book for formulae
+            float64 alphaNumerator = tan((pi*freqHz) / sampleRate) - 1.0;
+            float64 alphaDenominator = tan((pi*freqHz) / sampleRate) + 1.0;
+            float64 alpha = alphaNumerator / alphaDenominator;
+
+            // --- update coeffs
+            nc.b[0] = alpha;
+            nc.b[1] = 1.0;
+            nc.b[2] = 0.0;
+            nc.a[1] = alpha;
+            nc.a[2] = 0.0;
+        }
+        else if (mode == Mode::kAPF2)
+        {
+            // --- see book for formulae
+            float64 theta_c = 2.0*pi*freqHz / sampleRate;
+            float64 BW = freqHz / Q;
+            float64 argTan = pi*BW / sampleRate;
+            if (argTan >= 0.95*pi / 2.0) argTan = 0.95*pi / 2.0;
+
+            float64 alphaNumerator = tan(argTan) - 1.0;
+            float64 alphaDenominator = tan(argTan) + 1.0;
+            float64 alpha = alphaNumerator / alphaDenominator;
+            float64 beta = -cos(theta_c);
+
+            // --- update coeffs
+            nc.b[0] = -alpha;
+            nc.b[1] = beta*(1.0 - alpha);
+            nc.b[2] = 1.0;
+            nc.a[1] = beta*(1.0 - alpha);
+            nc.a[2] = -alpha;
+        }
+        else if (mode == Mode::kResonA)
+        {
+            // --- see book for formulae
+            float64 theta_c = 2.0*pi*freqHz / sampleRate;
+            float64 BW = freqHz / Q;
+            float64 filter_a2 = exp(-2.0*pi*(BW / sampleRate));
+            float64 filter_a1 = ((-4.0*filter_a2) / (1.0 + filter_a2))*cos(theta_c);
+            float64 filter_b0 = (1.0 - filter_a2)*pow((1.0 - (filter_a1*filter_a1) / (4.0 * filter_a2)), 0.5);
+
+            // --- update coeffs
+            nc.b[0] = filter_b0;
+            nc.b[1] = 0.0;
+            nc.b[2] = 0.0;
+            nc.a[1] = filter_a1;
+            nc.a[2] = filter_a2;
+        }
+        else if (mode == Mode::kResonB)
+        {
+            // --- see book for formulae
+            float64 theta_c = 2.0*pi*freqHz / sampleRate;
+            float64 BW = freqHz / Q;
+            float64 filter_a2 = exp(-2.0*pi*(BW / sampleRate));
+            float64 filter_a1 = ((-4.0*filter_a2) / (1.0 + filter_a2))*cos(theta_c);
+            float64 filter_b0 = 1.0 - pow(filter_a2, 0.5); // (1.0 - filter_a2)*pow((1.0 - (filter_a1*filter_a1) / (4.0 * filter_a2)), 0.5);
+
+            // --- update coeffs
+            nc.b[0] = filter_b0;
+            nc.b[1] = 0.0;
+            nc.b[2] = -filter_b0;
+            nc.a[1] = filter_a1;
+            nc.a[2] = filter_a2;
+        }
+
+        c.setNormalised(nc);
+    }
+
+    processor Processor
+    {
+        input stream SampleType in;
+        output stream SampleType out;
+
+        input event
+        {
+            float frequencyIn   [[ name: "Frequency", min: 10,    max: 22000, init: 1000 ]]; 
+            float qualityIn     [[ name: "Q",         min: 0.01,  max: 10.0,  init: 1.0 ]];
+            float gainIn        [[ name: "Gain",      min: -36.0, max: 36.0,  init: 0.0 ]]; 
+            float modeIn        [[ name: "Mode",      min: 0,     max: 29,    init: 0,   text: "LPF1P|kLPF1|kHPF1|kLPF2|kHPF2|kBPF2|kBSF2|kButterLPF2|kButterHPF2|kButterBPF2|kButterBSF2|kMMALPF2|kMMALPF2B|kLowShelf|kHiShelf|kNCQParaEQ|kCQParaEQ|kLWRLPF2|kLWRHPF2|kAPF1|kAPF2|kResonA|kResonB|kMatchLP2A|kMatchLP2B|kMatchBP2A|kMatchBP2B|kImpInvLP1|kImpInvLP2"]];
+        }
+
+        event frequencyIn (float v) { freq = v; recalc = true; }
+        event qualityIn    (float v) { q = v; recalc = true; }
+        event gainIn (float v) { gain = v; recalc = true; }
+        event modeIn (float v) { mode = int (v); recalc = true; }
+
+        float freq = 1000.0f, 
+                q    = 0.0f,
+                gain = 1.0f;
+        int mode = Mode::kLPF1P;
+        bool recalc = true;
+
+        void run()
+        {
+            Biquad::State s;
+            Biquad::Coeffs c;
+
+            loop
+            {
+                if (recalc)
+                {
+                    recalc = false;
+                    update (c, processor.frequency, mode, freq, q, gain);
+                }
+
+                loop (updateInterval)
+                {
+                    out << s.processTDFII (in, c);
+                    advance();
+                }
+            }
+        }
+    }
+}
+
+graph FilterTester [[ main ]]
+{
+    // input stream float32 in;
+    output stream float32 out;
+
+    input filter.frequencyIn;
+    input filter.modeIn;
+    input filter.qualityIn;
+    input filter.gainIn;
+    input gainStream.volume;
+
+    namespace Pirkle = PirkleBiquads (float32);
+    
+    let
+    {
+        source = soul::noise::Pink;
+        gainStream = soul::gain::SmoothedGainParameter(0.1f);
+        gain = soul::gain::DynamicGain (float32);
+        filter = Pirkle::Processor;
+    }
+
+    connection 
+    {
+        // source.out -> gain.in;
+        gainStream.gain -> gain.gain;
+        source.out -> gain.in;
+        gain.out -> filter.in;
+        filter.out -> out;
+    }
+}
