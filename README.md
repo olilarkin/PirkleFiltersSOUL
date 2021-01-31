@@ -14,6 +14,6 @@ depending on the filter
 
 try it online on the SOUL playground:
 
-VAFilters: https://soul.dev/lab/?id=b76c2bd2acf3cf88dab2883896996a5b
+VAFilters: https://soul.dev/lab/?id=c3600297e9789bd99610315411ab2138
 
-Biquads: https://soul.dev/lab/?id=0bccac78e5d441321e85a8ac1da13b75
+Biquads: https://soul.dev/lab/?id=ee458240c45993486f1bc20e4094c346
