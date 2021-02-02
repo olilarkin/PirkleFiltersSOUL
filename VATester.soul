@@ -7,13 +7,13 @@
     - https://www.willpirkle.com/app-notes/
 */
 
-namespace VA (using SampleType = float32)
+namespace pirkle_va (using SampleType = float32, int updateInterval = 16)
 {
     let FILTER_FC_MIN = 80.0;		    // 80Hz
     let FILTER_FC_MAX = 18000.0;		// 18kHz
     let FILTER_FC_DEFAULT = 10000.0f;	// 10kHz
 
-    namespace OnePole
+    namespace onepole
     {
         namespace Mode
         {
@@ -126,7 +126,7 @@ namespace VA (using SampleType = float32)
             {
                 State s;
                 Coeffs c;
-                VA::OnePole::setup(s, c);
+                onepole::setup(s, c);
 
                 loop
                 {
@@ -136,7 +136,7 @@ namespace VA (using SampleType = float32)
                         c.update (processor.frequency, freq);
                     }
 
-                    loop (16)
+                    loop (updateInterval)
                     {
                         out << s.process (in, c, mode);
                         advance();
@@ -146,7 +146,7 @@ namespace VA (using SampleType = float32)
         }
     }
 
-    namespace MoogLadder
+    namespace moog_ladder
     {
         namespace Mode
         {
@@ -160,10 +160,10 @@ namespace VA (using SampleType = float32)
 
         struct Coeffs
         {
-            VA::OnePole::Coeffs mLPF1c;
-            VA::OnePole::Coeffs mLPF2c;
-            VA::OnePole::Coeffs mLPF3c;
-            VA::OnePole::Coeffs mLPF4c;
+            onepole::Coeffs mLPF1c;
+            onepole::Coeffs mLPF2c;
+            onepole::Coeffs mLPF3c;
+            onepole::Coeffs mLPF4c;
 
             SampleType mK;		// K, set with Q
             SampleType mGamma;	// see block diagram
@@ -179,10 +179,10 @@ namespace VA (using SampleType = float32)
 
         struct State
         {
-            VA::OnePole::State mLPF1s;
-            VA::OnePole::State mLPF2s;
-            VA::OnePole::State mLPF3s;
-            VA::OnePole::State mLPF4s;
+            onepole::State mLPF1s;
+            onepole::State mLPF2s;
+            onepole::State mLPF3s;
+            onepole::State mLPF4s;
         }
 
         void setup (State& s, Coeffs& c)
@@ -194,10 +194,10 @@ namespace VA (using SampleType = float32)
             c.mC = SampleType(0); 
             c.mD = SampleType(0); 
             c.mE = SampleType(0);
-            VA::OnePole::setup(s.mLPF1s, c.mLPF1c);
-            VA::OnePole::setup(s.mLPF2s, c.mLPF2c);
-            VA::OnePole::setup(s.mLPF3s, c.mLPF3c);
-            VA::OnePole::setup(s.mLPF4s, c.mLPF4c);
+            onepole::setup(s.mLPF1s, c.mLPF1c);
+            onepole::setup(s.mLPF2s, c.mLPF2c);
+            onepole::setup(s.mLPF3s, c.mLPF3c);
+            onepole::setup(s.mLPF4s, c.mLPF4c);
         }
 
         void update (Coeffs& c, float64 sampleRate, float64 freqHz, float64 q, int mode)
@@ -214,7 +214,7 @@ namespace VA (using SampleType = float32)
             let wa = (2.0/ T) * tan( wd * T / 2.0); 
             let g  = SampleType(wa * T / 2.0);    
 
-            // G - the feedforward coeff in the VA One Pole
+            // G - the feedforward coeff in the One Pole
             //     same for LPF, HPF
             let G = SampleType( g / (1.0 + g));
 
@@ -259,7 +259,7 @@ namespace VA (using SampleType = float32)
                 dU = tanh (saturation * dU); // TODO: fast tanh
         
             // cascade of 4 filters
-            let mode = VA::OnePole::Mode::lowpass;
+            let mode = onepole::Mode::lowpass;
             let dLP1 = s.mLPF1s.process(dU  , c.mLPF1c, mode);
             let dLP2 = s.mLPF2s.process(dLP1, c.mLPF2c, mode);
             let dLP3 = s.mLPF3s.process(dLP2, c.mLPF3c, mode);
@@ -300,7 +300,7 @@ namespace VA (using SampleType = float32)
             {
                 State s;
                 Coeffs c;
-                MoogLadder::setup(s, c);
+                moog_ladder::setup(s, c);
 
                 loop
                 {
@@ -310,7 +310,7 @@ namespace VA (using SampleType = float32)
                         c.update (processor.frequency, freq, q, mode);
                     }
 
-                    loop (16)
+                    loop (updateInterval)
                     {
                         out << s.process (in, c, nonLinear, sat, 0.0); // TODO: gain comp
                         advance();
@@ -320,7 +320,7 @@ namespace VA (using SampleType = float32)
         }
     }
 
-    namespace SEM
+    namespace sem
     {
         namespace Mode
         {
@@ -334,7 +334,7 @@ namespace VA (using SampleType = float32)
         {
             // Trapezoidal Integrator Components
             SampleType mAlpha0; // input scalar
-            SampleType mAlpha;  // alpha is same as VA One Pole
+            SampleType mAlpha;  // alpha is same as One Pole
             SampleType mRho;    // feedback
             SampleType mQ;      // raw Q value, in range 0.5->25
         }
@@ -441,7 +441,7 @@ namespace VA (using SampleType = float32)
             {
                 State s;
                 Coeffs c;
-                SEM::setup(s, c);
+                sem::setup(s, c);
 
                 loop
                 {
@@ -451,7 +451,7 @@ namespace VA (using SampleType = float32)
                         c.update (processor.frequency, freq, q);
                     }
 
-                    loop (16)
+                    loop (updateInterval)
                     {
                         out << s.process (in, c, mode, nonLinear, sat, 0.5); // TODO: auxControl
                         advance();
@@ -461,7 +461,7 @@ namespace VA (using SampleType = float32)
         }
     }
 
-    namespace KThreeFive
+    namespace kthreefive
     {
         /** http://www.willpirkle.com/Downloads/AN-5Korg35_V3.pdf */
 
@@ -475,10 +475,10 @@ namespace VA (using SampleType = float32)
         {
             // LPF: LPF1+LPF2+HPF1
             // HPF: HPF1+LPF1+HPF2
-            VA::OnePole::Coeffs mLPF1c;
-            VA::OnePole::Coeffs mLPF2c;
-            VA::OnePole::Coeffs mHPF1c;
-            VA::OnePole::Coeffs mHPF2c;
+            onepole::Coeffs mLPF1c;
+            onepole::Coeffs mLPF2c;
+            onepole::Coeffs mHPF1c;
+            onepole::Coeffs mHPF2c;
 
             SampleType mK;		// K, set with Q
             SampleType mAlpha0;	// our u scalar value
@@ -486,20 +486,20 @@ namespace VA (using SampleType = float32)
 
         struct State
         {
-            VA::OnePole::State mLPF1s;
-            VA::OnePole::State mLPF2s;
-            VA::OnePole::State mHPF1s;
-            VA::OnePole::State mHPF2s;
+            onepole::State mLPF1s;
+            onepole::State mLPF2s;
+            onepole::State mHPF1s;
+            onepole::State mHPF2s;
         }
 
         void setup (State& s, Coeffs& c)
         {
             c.mK = SampleType(0.01);
             c.mAlpha0 = SampleType(0);
-            VA::OnePole::setup(s.mLPF1s, c.mLPF1c);
-            VA::OnePole::setup(s.mLPF2s, c.mLPF2c);
-            VA::OnePole::setup(s.mHPF1s, c.mHPF1c);
-            VA::OnePole::setup(s.mHPF2s, c.mHPF2c);
+            onepole::setup(s.mLPF1s, c.mLPF1c);
+            onepole::setup(s.mLPF2s, c.mLPF2c);
+            onepole::setup(s.mHPF1s, c.mHPF1c);
+            onepole::setup(s.mHPF2s, c.mHPF2c);
         }
 
         void update (Coeffs& c, float64 sampleRate, float64 freqHz, float64 q, int mode)
@@ -516,7 +516,7 @@ namespace VA (using SampleType = float32)
             let wa = (2.0/ T) * tan( wd * T / 2.0); 
             let g  = SampleType(wa * T / 2.0);    
 
-            // G - the feedforward coeff in the VA One Pole
+            // G - the feedforward coeff in the One Pole
             //     same for LPF, HPF
             let G = SampleType( g / (1.0 + g));
 
@@ -630,7 +630,7 @@ namespace VA (using SampleType = float32)
             {
                 State s;
                 Coeffs c;
-                KThreeFive::setup(s, c);
+                kthreefive::setup(s, c);
 
                 loop
                 {
@@ -640,7 +640,7 @@ namespace VA (using SampleType = float32)
                         c.update (processor.frequency, freq, q, mode);
                     }
 
-                    loop (16)
+                    loop (updateInterval)
                     {
                         out << s.process (in, c, nonLinear, sat, mode);
                         advance();
@@ -650,16 +650,16 @@ namespace VA (using SampleType = float32)
         }
     }
 
-    namespace DiodeLadder
+    namespace diode_ladder
     {
         /** http://www.willpirkle.com/Downloads/AN-6DiodeLadderFilter.pdf */
 
         struct Coeffs
         {
-            VA::OnePole::Coeffs mLPF1c;
-            VA::OnePole::Coeffs mLPF2c;
-            VA::OnePole::Coeffs mLPF3c;
-            VA::OnePole::Coeffs mLPF4c;
+            onepole::Coeffs mLPF1c;
+            onepole::Coeffs mLPF2c;
+            onepole::Coeffs mLPF3c;
+            onepole::Coeffs mLPF4c;
 
             SampleType mK;      // K, set with Q
             SampleType mGamma;  // needed for final calc and update
@@ -671,10 +671,10 @@ namespace VA (using SampleType = float32)
 
         struct State
         {
-            VA::OnePole::State mLPF1s;
-            VA::OnePole::State mLPF2s;
-            VA::OnePole::State mLPF3s;
-            VA::OnePole::State mLPF4s;
+            onepole::State mLPF1s;
+            onepole::State mLPF2s;
+            onepole::State mLPF3s;
+            onepole::State mLPF4s;
         }
 
         void setup (State& s, Coeffs& c)
@@ -689,10 +689,10 @@ namespace VA (using SampleType = float32)
             c.mSG3 = 0.0;  
             c.mSG4 = 0.0;  
 
-            VA::OnePole::setup(s.mLPF1s, c.mLPF1c);
-            VA::OnePole::setup(s.mLPF2s, c.mLPF2c);
-            VA::OnePole::setup(s.mLPF3s, c.mLPF3c);
-            VA::OnePole::setup(s.mLPF4s, c.mLPF4c);
+            onepole::setup(s.mLPF1s, c.mLPF1c);
+            onepole::setup(s.mLPF2s, c.mLPF2c);
+            onepole::setup(s.mLPF3s, c.mLPF3c);
+            onepole::setup(s.mLPF4s, c.mLPF4c);
         }
 
         void update (Coeffs& c, float64 sampleRate, float64 freqHz, float64 q)
@@ -784,7 +784,7 @@ namespace VA (using SampleType = float32)
             if (nonLinear)
                 dU = tanh (saturation * dU);
 
-            let mode = VA::OnePole::Mode::lowpass;
+            let mode = onepole::Mode::lowpass;
             // cascade of four filters
             return s.mLPF4s.process ( s.mLPF3s.process ( s.mLPF2s.process ( 
                        s.mLPF1s.process (dU, c.mLPF1c, mode), c.mLPF2c, mode), c.mLPF3c, mode), c.mLPF4c, mode);
@@ -818,7 +818,7 @@ namespace VA (using SampleType = float32)
             {
                 State s;
                 Coeffs c;
-                DiodeLadder::setup(s, c);
+                diode_ladder::setup(s, c);
 
                 loop
                 {
@@ -828,7 +828,7 @@ namespace VA (using SampleType = float32)
                         c.update (processor.frequency, freq, q);
                     }
 
-                    loop (16)
+                    loop (updateInterval)
                     {
                         out << s.process (in, c, nonLinear, sat, 0.0); // TODO: gain comp
                         advance();
@@ -883,23 +883,23 @@ graph FilterTester [[ main ]]
     input mapper.modDepthIn;
     input lfo.shapeIn     [[ name: "LFO Shape" ]];
 
-    namespace PolyBlep = soul::oscillators::poly_blep;
+    namespace poly_blep = soul::oscillators::poly_blep;
 
     let
     {
-        source = PolyBlep::Processor (0, 100.0);
-        // source = soul::noise::White;
+        source = poly_blep::Processor (0, 100.0);
+        // source = soul::noise::Pink;
 
         gainStream = soul::gain::SmoothedGainParameter(0.1f);
         gain = soul::gain::DynamicGain (float32);
         lfo = soul::oscillators::lfo::Processor (0, 1, 100.0f); // you can lower the sample rate of the LFO here with e.g. "/ 4"
         mapper = FrequencyMapping;
 
-        // filter = VA::OnePole::Processor;
-        // filter = VA::SEM::Processor;
-        // filter = VA::MoogLadder::Processor;
-        filter = VA::KThreeFive::Processor;
-        // filter = VA::DiodeLadder::Processor;
+        // filter = onepole::Processor;
+        // filter = pirkle_va::sem::Processor;
+        filter = pirkle_va::moog_ladder::Processor;
+        // filter = pirkle_va::kthreefive::Processor;
+        // filter = pirkle_va::diode_ladder::Processor;
     }
 
     connection 

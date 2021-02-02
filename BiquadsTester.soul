@@ -7,9 +7,8 @@
     - https://www.willpirkle.com/app-notes/
 */
 
-namespace PirkleBiquads (using SampleType)
+namespace pirkle_biquads (using SampleType = float32, int updateInterval = 16)
 {
-    let updateInterval = 16;
     let kSqrtTwo = sqrt (2.0);
 
     namespace Biquad = soul::filters (SampleType)::biquad;
@@ -47,14 +46,14 @@ namespace PirkleBiquads (using SampleType)
         let kImpInvLP2   = 28;
     }
 
-    void update (Biquad::Coeffs& c, float64 sampleRate, int mode, float64 freqHz, float64 Q, float64 boostCut_dB)
+    void update (Biquad::Coeffs& c, float64& wet, float64& dry, float64 sampleRate, int mode, float64 freqHz, float64 Q, float64 boostCut_dB)
     {
         Biquad::Coeffs nc; //normalized coefficients
 
         // --- set default pass-through
         nc.b[0] = 1.0;
-        // nc[c0] = 1.0;
-        // nc[d0] = 0.0;
+        wet = 1.0;
+        dry = 0.0;
 
         // --- decode filter type and calculate accordingly
         // --- impulse invariant LPF, matches closely with one-pole version,
@@ -214,7 +213,8 @@ namespace PirkleBiquads (using SampleType)
             nc.b[1] = b_1;
             nc.b[2] = b_2;
             nc.a[1] = a_1;
-            nc.a[2] = a_2;        }
+            nc.a[2] = a_2;
+        }
         // --- kMatchBP2B = LOOSE fit BPF vicanek algo
         else if (mode == Mode::kMatchBP2B)
         {
@@ -455,44 +455,44 @@ namespace PirkleBiquads (using SampleType)
             nc.a[1] = filter_a1;
             nc.a[2] = filter_a2;
         }
-        // else if (mode == Mode::kLowShelf)
-        // {
-        //     // --- see book for formulae
-        //     float64 theta_c = 2.0*pi*freqHz / sampleRate;
-        //     float64 mu = pow(10.0, boostCut_dB / 20.0);
+        else if (mode == Mode::kLowShelf)
+        {
+            // --- see book for formulae
+            float64 theta_c = 2.0*pi*freqHz / sampleRate;
+            float64 mu = pow(10.0, boostCut_dB / 20.0);
 
-        //     float64 beta = 4.0 / (1.0 + mu);
-        //     float64 delta = beta*tan(theta_c / 2.0);
-        //     float64 gamma = (1.0 - delta) / (1.0 + delta);
+            float64 beta = 4.0 / (1.0 + mu);
+            float64 delta = beta*tan(theta_c / 2.0);
+            float64 gamma = (1.0 - delta) / (1.0 + delta);
 
-        //     // --- update coeffs
-        //     nc.b[0] = (1.0 - gamma) / 2.0;
-        //     nc.b[1] = (1.0 - gamma) / 2.0;
-        //     nc.b[2] = 0.0;
-        //     nc.a[1] = -gamma;
-        //     nc.a[2] = 0.0;
+            // --- update coeffs
+            nc.b[0] = (1.0 - gamma) / 2.0;
+            nc.b[1] = (1.0 - gamma) / 2.0;
+            nc.b[2] = 0.0;
+            nc.a[1] = -gamma;
+            nc.a[2] = 0.0;
 
-        //     nc[c0] = mu - 1.0;
-        //     nc[d0] = 1.0;
-        // }
-        // else if (mode == Mode::kHiShelf)
-        // {
-        //     float64 theta_c = 2.0*pi*freqHz / sampleRate;
-        //     float64 mu = pow(10.0, boostCut_dB / 20.0);
+            wet = mu - 1.0;
+            dry = 1.0;
+        }
+        else if (mode == Mode::kHiShelf)
+        {
+            float64 theta_c = 2.0*pi*freqHz / sampleRate;
+            float64 mu = pow(10.0, boostCut_dB / 20.0);
 
-        //     float64 beta = (1.0 + mu) / 4.0;
-        //     float64 delta = beta*tan(theta_c / 2.0);
-        //     float64 gamma = (1.0 - delta) / (1.0 + delta);
+            float64 beta = (1.0 + mu) / 4.0;
+            float64 delta = beta*tan(theta_c / 2.0);
+            float64 gamma = (1.0 - delta) / (1.0 + delta);
 
-        //     nc.b[0] = (1.0 + gamma) / 2.0;
-        //     nc.b[1] = -nc.b[0];
-        //     nc.b[2] = 0.0;
-        //     nc.a[1] = -gamma;
-        //     nc.a[2] = 0.0;
+            nc.b[0] = (1.0 + gamma) / 2.0;
+            nc.b[1] = -nc.b[0];
+            nc.b[2] = 0.0;
+            nc.a[1] = -gamma;
+            nc.a[2] = 0.0;
 
-        //     nc[c0] = mu - 1.0;
-        //     nc[d0] = 1.0;
-        // }
+            wet = mu - 1.0;
+            dry = 1.0;
+        }
         else if (mode == Mode::kCQParaEQ)
         {
             // --- see book for formulae
@@ -515,36 +515,36 @@ namespace PirkleBiquads (using SampleType)
             nc.a[1] = bBoost ? beta / d0 : beta / e0;
             nc.a[2] = bBoost ? delta / d0 : eta / e0;
         }
-        // else if (mode == Mode::kNCQParaEQ)
-        // {
-        //     // --- see book for formulae
-        //     float64 theta_c = 2.0*pi*freqHz / sampleRate;
-        //     float64 mu = pow(10.0, boostCut_dB / 20.0);
+        else if (mode == Mode::kNCQParaEQ)
+        {
+            // --- see book for formulae
+            float64 theta_c = 2.0*pi*freqHz / sampleRate;
+            float64 mu = pow(10.0, boostCut_dB / 20.0);
 
-        //     // --- clamp to 0.95 pi/2 (you can experiment with this)
-        //     float64 tanArg = theta_c / (2.0 * Q);
-        //     if (tanArg >= 0.95*pi / 2.0) tanArg = 0.95*pi / 2.0;
+            // --- clamp to 0.95 pi/2 (you can experiment with this)
+            float64 tanArg = theta_c / (2.0 * Q);
+            if (tanArg >= 0.95*pi / 2.0) tanArg = 0.95*pi / 2.0;
 
-        //     // --- intermediate variables (you can condense this if you wish)
-        //     float64 zeta = 4.0 / (1.0 + mu);
-        //     float64 betaNumerator = 1.0 - zeta*tan(tanArg);
-        //     float64 betaDenominator = 1.0 + zeta*tan(tanArg);
+            // --- intermediate variables (you can condense this if you wish)
+            float64 zeta = 4.0 / (1.0 + mu);
+            float64 betaNumerator = 1.0 - zeta*tan(tanArg);
+            float64 betaDenominator = 1.0 + zeta*tan(tanArg);
 
-        //     float64 beta = 0.5*(betaNumerator / betaDenominator);
-        //     float64 gamma = (0.5 + beta)*(cos(theta_c));
-        //     float64 alpha = (0.5 - beta);
+            float64 beta = 0.5*(betaNumerator / betaDenominator);
+            float64 gamma = (0.5 + beta)*(cos(theta_c));
+            float64 alpha = (0.5 - beta);
 
-        //     // --- update coeffs
-        //     nc.b[0] = alpha;
-        //     nc.b[1] = 0.0;
-        //     nc.b[2] = -alpha;
-        //     nc.a[1] = -2.0*gamma;
-        //     nc.a[2] = 2.0*beta;
+            // --- update coeffs
+            nc.b[0] = alpha;
+            nc.b[1] = 0.0;
+            nc.b[2] = -alpha;
+            nc.a[1] = -2.0*gamma;
+            nc.a[2] = 2.0*beta;
 
-        //     nc[c0] = mu - 1.0;
-        //     nc[d0] = 1.0;
+            wet = mu - 1.0;
+            dry = 1.0;
         
-        // }
+        }
         else if (mode == Mode::kLWRLPF2)
         {
             // --- see book for formulae
@@ -679,18 +679,22 @@ namespace PirkleBiquads (using SampleType)
         {
             Biquad::State s;
             Biquad::Coeffs c;
+            float64 wet = 1.0;
+            float64 dry = 0.0;
 
             loop
             {
                 if (recalc)
                 {
                     recalc = false;
-                    update (c, processor.frequency, mode, freq, q, gain);
+                    update (c, wet, dry, processor.frequency, mode, freq, q, gain);
                 }
 
                 loop (updateInterval)
                 {
-                    out << s.processTDFII (in, c);
+                    let x = in;
+                    let y = s.processTDFII (x, c);
+                    out << SampleType (dry * x) + SampleType (wet * y);
                     advance();
                 }
             }
@@ -709,14 +713,12 @@ graph FilterTester [[ main ]]
     input filter.gainIn;
     input gainStream.volume;
 
-    namespace Pirkle = PirkleBiquads (float32);
-    
     let
     {
         source = soul::noise::Pink;
         gainStream = soul::gain::SmoothedGainParameter(0.1f);
         gain = soul::gain::DynamicGain (float32);
-        filter = Pirkle::Processor;
+        filter = pirkle_biquads::Processor;
     }
 
     connection 
